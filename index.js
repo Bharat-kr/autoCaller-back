@@ -16,17 +16,10 @@ const config = require("./config/config");
 const textToSpeech = require("./lib/textToSpeech.lib");
 const speechToText = require("./lib/speechToText.lib");
 const openai = require("./lib/openai.lib");
+const connectDB = require("./config/db");
 
-//mongo connection
-mongoose.set("strictQuery", true);
-mongoose
-  .connect(
-    `mongodb+srv://Bharatkumar15:${config.MONGO.PASS}@fooders-api.evs9e.mongodb.net/AutoCaller-Poc?retryWrites=true&w=majority`,
-    {
-      useNewUrlParser: true,
-    }
-  )
-  .then(console.log("mongo connected"));
+//db Connection
+connectDB();
 
 // middleware
 app.use(cors());
