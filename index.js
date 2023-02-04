@@ -2,20 +2,18 @@ const express = require("express");
 const app = express();
 const cookieParser = require("cookie-parser");
 const cors = require("cors");
+const fs = require("fs");
+const util = require("util");
+
+//DB
 const mongoose = require("mongoose");
-const morgan = require("morgan");
-const { Configuration, OpenAIApi } = require("openai");
 const DataModel = require("./DataModel");
+
+//configs
 const config = require("./config/config");
 const textToSpeech = require("./lib/textToSpeech.lib");
-const fs = require("node:fs");
-const util = require("node:util");
-
-//openai
-const configuration = new Configuration({
-  apiKey: config.OPENAI.API_KEY,
-});
-const openai = new OpenAIApi(configuration);
+const speechToText = require("./lib/speechToText.lib");
+const openai = require("./lib/openai.lib");
 
 //mongo connection
 mongoose.set("strictQuery", true);
@@ -28,36 +26,42 @@ mongoose
   )
   .then(console.log("mongo connected"));
 
-// morgan is logging package for node js this console log the the post get any request made
-app.use(morgan("dev"));
-
 // middleware
 app.use(cors());
 app.use(cookieParser());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
-// const init = async () => {
-//   const [result] = await textToSpeech.listVoices({});
-//   const voices = result.voices;
-
-//   console.log("Voices:");
-//   voices.forEach((voice) => {
-//     console.log(`Name: ${voice.name}`);
-//     console.log(`  SSML Voice Gender: ${voice.ssmlGender}`);
-//     console.log(`  Natural Sample Rate Hertz: ${voice.naturalSampleRateHertz}`);
-//     console.log("  Supported languages:");
-//     voice.languageCodes.forEach((languageCode) => {
-//       console.log(`    ${languageCode}`);
-//     });
-//   });
-// };
-// init();
-
 app.post("/", async (req, res) => {
   const { customer_message, user_id } = req.body;
-  console.log(customer_message);
+  console.log("------------------------------------------------");
+  console.log("Customer : ", customer_message);
   try {
+    const audioData = fs.readFileSync(__dirname + "/output.mp3");
+    const buffer = new Buffer.from(audioData);
+    
+    const audio = {
+      content: buffer,
+    };
+    //converting buffer to text
+    const config = {
+      encoding: "MP3",
+      sampleRateHertz: 16000,
+      languageCode: "en-US",
+    };
+    const requestJSON = {
+      audio: audio,
+      config: config,
+    };
+
+    // Detects speech in the audio file
+    const [SpeechTOTextResponse] = await speechToText.recognize(requestJSON);
+    const transcription = SpeechTOTextResponse.results
+      .map((result) => result.alternatives[0].transcript)
+      .join("\n");
+    console.log("transcription", transcription);
+
+    //getting old chat-history
     var old_history = await DataModel.find({
       user_id,
     })
@@ -80,30 +84,29 @@ app.post("/", async (req, res) => {
       presence_penalty: 0,
       stop: ["Customer"],
     });
-    console.log(result.data.choices[0].text);
+    console.log("AI : ", result.data.choices[0].text);
+
+    //converting text
+    const request = {
+      input: { text: result.data.choices[0].text },
+      voice: {
+        languageCode: "en-US",
+        name: "en-US-Neural2-J",
+      },
+      audioConfig: { audioEncoding: "MP3" },
+    };
+
+    const [response] = await textToSpeech.synthesizeSpeech(request);
+    console.log("AI Buffer : ", response.audioContent);
+    //TODO: Send this Buffer to frontend
+
+    //saving responve for future conversation
     const Item = new DataModel({
       _id: new mongoose.Types.ObjectId(),
       question: customer_message,
       user_id: user_id,
       response: result.data.choices[0].text,
     });
-    const request = {
-      input: { text: result.data.choices[0].text },
-      // Select the language and SSML voice gender (optional)
-      voice: {
-        languageCode: "en-US",
-        name: "en-US-Neural2-J",
-      },
-      // select the type of audio encoding
-      audioConfig: { audioEncoding: "MP3" },
-    };
-
-    // Performs the text-to-speech request
-    const [response] = await textToSpeech.synthesizeSpeech(request);
-    const writeFile = util.promisify(fs.writeFile);
-    await writeFile("output.mp3", response.audioContent, "binary");
-    console.log("Audio content written to file: output.mp3");
-    console.log(response);
     await Item.save();
     res.status(200).json({
       response: result.data.choices[0].text,
